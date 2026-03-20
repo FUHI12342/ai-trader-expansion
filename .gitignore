@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+*.db
+*.sqlite
+node_modules/
+dist/
+.vite/
+coverage/
+.pytest_cache/

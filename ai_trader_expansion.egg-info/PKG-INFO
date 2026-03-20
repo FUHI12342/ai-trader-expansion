@@ -1,0 +1,27 @@
+Metadata-Version: 2.4
+Name: ai-trader-expansion
+Version: 0.1.0
+Summary: AI株式トレーダー拡張：複数戦略＋評価システム＋SHANON連携
+Author: SHANON Project
+Requires-Python: >=3.10
+Requires-Dist: yfinance>=0.2.36
+Requires-Dist: requests>=2.31.0
+Requires-Dist: pandas>=2.0.0
+Requires-Dist: numpy>=1.26.0
+Requires-Dist: lightgbm>=4.3.0
+Requires-Dist: scikit-learn>=1.4.0
+Requires-Dist: pandas-ta>=0.3.14b
+Requires-Dist: fastapi>=0.110.0
+Requires-Dist: uvicorn[standard]>=0.28.0
+Requires-Dist: httpx>=0.27.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0.0; extra == "dev"
+Requires-Dist: pytest-cov>=5.0.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.23.0; extra == "dev"
+Requires-Dist: mypy>=1.9.0; extra == "dev"
+Requires-Dist: ruff>=0.3.0; extra == "dev"
+Dynamic: author
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary

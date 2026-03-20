@@ -1,0 +1,101 @@
+graph TB
+    subgraph DataSources["データソース"]
+        YF[yfinance\n米国・日本株]
+        JQ[J-Quants API\n日本株日次データ]
+        ED[EDINET API v2\n有価証券報告書]
+    end
+
+    subgraph DataLayer["データ層 (src/data/)"]
+        YFC[YFinanceClient\nyfinanceラッパー]
+        JQC[JQuantsClient\n認証→株価取得]
+        EDC[EdinetClient\n開示書類取得]
+        DM[DataManager\nソース切替+SQLiteキャッシュ]
+    end
+
+    subgraph StrategyLayer["戦略層 (src/strategies/)"]
+        BASE[BaseStrategy\n抽象基底クラス]
+        MAC[MACrossover\nゴールデン/デッドクロス]
+        DMO[DualMomentum\nAntonacci方式]
+        MRS[MACD_RSI\nMACDクロス+RSIフィルタ]
+        BRA[BollingerRSI_ADX\nBB+RSI+ADXトリプルフィルタ]
+        LGB[LGBMPredictor\nWalk-Forward ML予測]
+    end
+
+    subgraph EvalLayer["評価層 (src/evaluation/)"]
+        BT[Backtester\nイベントドリブン\n手数料・スリッページ考慮]
+        WF[WalkForward\nIS/OOS分析\n統計検定]
+        MC[MonteCarlo\n1000回シャッフル\n信頼区間]
+        ST[Statistics\nt検定\nブートストラップ]
+        MX[Metrics\nSharpe/Sortino\nCalmar/WinRate]
+    end
+
+    subgraph BrokerLayer["ブローカー層 (src/brokers/)"]
+        BBR[BrokerBase\n抽象基底クラス]
+        PB[PaperBroker\n仮想取引\nポジション管理]
+        KB[KabuStation\nauカブコム\nREST APIクライアント]
+    end
+
+    subgraph APILayer["API層 (src/api/)"]
+        SRV[FastAPI Server\nSHANON連携]
+        S_STAT[GET /api/status\nGo/Nogoステータス]
+        S_POS[GET /api/positions\nポジション一覧]
+        S_PERF[GET /api/performance\nメトリクス]
+        S_BT[POST /api/backtest\nオンデマンド実行]
+    end
+
+    subgraph ConfigLayer["設定層 (config/)"]
+        CFG[Settings\n全設定集約\nfrozen dataclass]
+        ENV[環境変数\nAPIキー/DB接続\n秘密情報管理]
+    end
+
+    subgraph Storage["ストレージ"]
+        SQLite[(SQLiteキャッシュ\ndata_cache.db)]
+    end
+
+    %% データフロー
+    YF --> YFC
+    JQ --> JQC
+    ED --> EDC
+    YFC --> DM
+    JQC --> DM
+    EDC --> DM
+    DM <--> SQLite
+
+    %% 戦略継承
+    BASE --> MAC
+    BASE --> DMO
+    BASE --> MRS
+    BASE --> BRA
+    BASE --> LGB
+
+    %% バックテストフロー
+    DM --> BT
+    MAC & DMO & MRS & BRA & LGB --> BT
+    BT --> MX
+    BT --> WF
+    BT --> MC
+    BT --> ST
+
+    %% ブローカー継承
+    BBR --> PB
+    BBR --> KB
+
+    %% APIフロー
+    SRV --> S_STAT & S_POS & S_PERF & S_BT
+    S_STAT --> MAC & DMO & MRS & BRA
+    S_POS --> PB
+    S_PERF --> PB & MX
+    S_BT --> BT & DM
+
+    %% 設定フロー
+    ENV --> CFG
+    CFG --> DM & JQC & EDC & KB & PB & SRV
+
+    style DataSources fill:#2d3748,stroke:#4a5568,color:#e2e8f0
+    style DataLayer fill:#1a365d,stroke:#2b6cb0,color:#bee3f8
+    style StrategyLayer fill:#1c4532,stroke:#276749,color:#c6f6d5
+    style EvalLayer fill:#3d2b1f,stroke:#7b3f00,color:#feebc8
+    style BrokerLayer fill:#322659,stroke:#553c9a,color:#e9d8fd
+    style APILayer fill:#1a202c,stroke:#4a5568,color:#e2e8f0
+    style ConfigLayer fill:#2d3748,stroke:#718096,color:#e2e8f0
+    style Storage fill:#2d3748,stroke:#718096,color:#e2e8f0
