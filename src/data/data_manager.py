@@ -15,6 +15,7 @@ import pandas as pd
 from config.settings import Settings, get_settings
 from .yfinance_client import YFinanceClient
 from .jquants_client import JQuantsClient
+from .jquants_official_client import JQuantsOfficialClient
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class DataManager:
         self._source = source
         self._cache_expiry_days = cache_expiry_days
         self._yfinance: Optional[YFinanceClient] = None
-        self._jquants: Optional[JQuantsClient] = None
+        self._jquants: Optional[JQuantsClient | JQuantsOfficialClient] = None
         self._conn: Optional[sqlite3.Connection] = None
         self._write_lock = threading.Lock()
         self._init_db()
@@ -81,10 +82,16 @@ class DataManager:
             self._yfinance = YFinanceClient(cache_enabled=False)
         return self._yfinance
 
-    def _get_jquants(self) -> JQuantsClient:
-        """JQuantsClientを遅延初期化する。"""
+    def _get_jquants(self) -> JQuantsClient | JQuantsOfficialClient:
+        """JQuantsClientを遅延初期化する。
+
+        use_official_client が True の場合は公式SDKアダプタを使用する。
+        """
         if self._jquants is None:
-            self._jquants = JQuantsClient(self._settings.jquants)
+            if self._settings.jquants.use_official_client:
+                self._jquants = JQuantsOfficialClient(self._settings.jquants)
+            else:
+                self._jquants = JQuantsClient(self._settings.jquants)
         return self._jquants
 
     def _load_from_cache(

@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from .base import BrokerBase, Order, OrderSide, OrderType, Position
+from .trade_journal import TradeJournal
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ class PaperBroker(BrokerBase):
         片道手数料率（デフォルト: 0.001 = 0.1%）
     slippage_rate:
         スリッページ率（デフォルト: 0.0005 = 0.05%）
+    journal:
+        SQLite永続化ジャーナル（省略時はインメモリのみ）
     """
 
     def __init__(
@@ -33,11 +36,13 @@ class PaperBroker(BrokerBase):
         initial_balance: float = 1_000_000.0,
         fee_rate: float = 0.001,
         slippage_rate: float = 0.0005,
+        journal: Optional[TradeJournal] = None,
     ) -> None:
         self._balance = initial_balance
         self._initial_balance = initial_balance
         self._fee_rate = fee_rate
         self._slippage_rate = slippage_rate
+        self._journal = journal
 
         # 可変状態（ミュータブルだがブローカー内部状態として管理）
         self._positions: Dict[str, dict] = {}      # {symbol: {"quantity": float, "avg_price": float}}
@@ -169,6 +174,10 @@ class PaperBroker(BrokerBase):
 
         self._orders[order_id] = order
         self._order_history.append(order)
+
+        if self._journal is not None:
+            self._journal.save_order(order)
+
         return order
 
     def cancel_order(self, order_id: str) -> bool:
@@ -194,6 +203,88 @@ class PaperBroker(BrokerBase):
     def get_order_history(self) -> List[Order]:
         """注文履歴を返す（immutableコピー）。"""
         return list(self._order_history)
+
+    def save_snapshot(self) -> None:
+        """現在のポートフォリオスナップショットをジャーナルに保存する。
+
+        journal が None の場合は何もしない。
+        """
+        if self._journal is None:
+            return
+        positions_serializable = {
+            sym: {"quantity": info["quantity"], "avg_price": info["avg_price"]}
+            for sym, info in self._positions.items()
+        }
+        self._journal.save_snapshot(
+            balance=self._balance,
+            equity=self.get_equity(),
+            positions=positions_serializable,
+        )
+
+    @classmethod
+    def load_state(
+        cls,
+        journal: TradeJournal,
+        fee_rate: float = 0.001,
+        slippage_rate: float = 0.0005,
+        fallback_balance: float = 1_000_000.0,
+    ) -> "PaperBroker":
+        """ジャーナルから状態を復元した PaperBroker を返す。
+
+        最新スナップショットがあればその残高・ポジションを復元する。
+        スナップショットがない場合は fallback_balance で新規作成する。
+
+        Parameters
+        ----------
+        journal:
+            復元元のジャーナル。
+        fee_rate:
+            手数料率。
+        slippage_rate:
+            スリッページ率。
+        fallback_balance:
+            スナップショットが存在しない場合の初期残高。
+
+        Returns
+        -------
+        PaperBroker
+            復元済みのブローカーインスタンス。
+        """
+        snapshot = journal.load_latest_snapshot()
+
+        if snapshot is not None:
+            balance = float(snapshot["balance"])  # type: ignore[arg-type]
+            raw_positions: Dict[str, dict] = snapshot.get("positions", {})  # type: ignore[assignment]
+        else:
+            balance = fallback_balance
+            raw_positions = {}
+
+        broker = cls(
+            initial_balance=balance,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            journal=journal,
+        )
+
+        # ポジションを復元
+        for sym, info in raw_positions.items():
+            broker._positions[sym] = {
+                "quantity": float(info.get("quantity", 0.0)),
+                "avg_price": float(info.get("avg_price", 0.0)),
+            }
+
+        # 注文履歴を復元
+        for order in journal.load_orders():
+            broker._orders[order.order_id] = order
+            broker._order_history.append(order)
+
+        logger.info(
+            "PaperBroker 状態復元: balance=%.0f, positions=%d, orders=%d",
+            balance,
+            len(broker._positions),
+            len(broker._order_history),
+        )
+        return broker
 
     def reset(self) -> None:
         """ブローカー状態をリセットする（テスト用）。"""

@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from config.settings import get_settings
 from src.brokers.paper_broker import PaperBroker
+from src.brokers.trade_journal import TradeJournal
 from src.evaluation.backtester import run_backtest
 from src.strategies import (
     MACrossoverStrategy,
@@ -67,10 +68,12 @@ def _verify_api_key(
 
 # グローバルインスタンス（起動時に初期化）
 _settings = get_settings()
-_paper_broker = PaperBroker(
-    initial_balance=_settings.initial_capital,
+_journal = TradeJournal(db_path=_settings.database.journal_db_path)
+_paper_broker = PaperBroker.load_state(
+    journal=_journal,
     fee_rate=_settings.fee_rate,
     slippage_rate=_settings.slippage_rate,
+    fallback_balance=_settings.initial_capital,
 )
 
 # 全戦略の登録
@@ -350,6 +353,92 @@ async def run_backtest_api(
         win_rate=result.metrics.win_rate,
         total_trades=result.metrics.total_trades,
     )
+
+
+@app.get(
+    "/api/journal/orders",
+    summary="注文履歴取得（DB）",
+)
+async def get_journal_orders(
+    skip: int = Query(0, ge=0, description="スキップ件数"),
+    limit: int = Query(100, ge=1, le=1000, description="取得件数上限"),
+    _: None = Depends(_verify_api_key),
+) -> List[Dict[str, Any]]:
+    """DBから注文履歴を取得する（ページネーション対応）。
+
+    Parameters
+    ----------
+    skip:
+        先頭からスキップする件数。
+    limit:
+        取得件数の上限（最大1000）。
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        注文レコードのリスト。
+    """
+    orders = _journal.load_orders()
+    page = orders[skip: skip + limit]
+    return [o.to_dict() for o in page]
+
+
+@app.get(
+    "/api/journal/daily-pnl",
+    summary="日次P&L取得（DB）",
+)
+async def get_journal_daily_pnl(
+    days: int = Query(30, ge=1, le=365, description="取得日数"),
+    _: None = Depends(_verify_api_key),
+) -> List[Dict[str, Any]]:
+    """DBから日次P&Lを取得する。
+
+    Parameters
+    ----------
+    days:
+        取得する日数（1〜365）。
+
+    Returns
+    -------
+    List[Dict[str, Any]]
+        日次P&Lレコードのリスト（date昇順）。
+    """
+    return _journal.get_daily_pnl(days=days)  # type: ignore[return-value]
+
+
+@app.get(
+    "/api/journal/summary",
+    summary="トレードサマリー統計（DB）",
+)
+async def get_journal_summary(
+    _: None = Depends(_verify_api_key),
+) -> Dict[str, Any]:
+    """DBからトレードサマリー統計を取得する。
+
+    Returns
+    -------
+    Dict[str, Any]
+        total_orders, filled_orders, total_fees, net_pnl 等。
+    """
+    return _journal.get_trade_summary()  # type: ignore[return-value]
+
+
+@app.post(
+    "/api/snapshot",
+    summary="ポートフォリオスナップショット保存",
+)
+async def post_snapshot(
+    _: None = Depends(_verify_api_key),
+) -> Dict[str, str]:
+    """現在のポートフォリオスナップショットをDBに保存する。
+
+    Returns
+    -------
+    Dict[str, str]
+        {"status": "ok"} を返す。
+    """
+    _paper_broker.save_snapshot()
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

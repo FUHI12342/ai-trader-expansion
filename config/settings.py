@@ -14,16 +14,22 @@ from typing import Optional
 @dataclass(frozen=True)
 class JQuantsSettings:
     """J-Quants API設定。"""
+    # V2 API (推奨)
+    api_key: str = ""
+    # V1 API (非推奨、後方互換)
     email: str = ""
     password: str = ""
-    base_url: str = "https://api.jquants.com/v1"
+    base_url: str = "https://api.jquants.com/v2"
+    use_official_client: bool = False
 
     @classmethod
     def from_env(cls) -> "JQuantsSettings":
         return cls(
+            api_key=os.environ.get("JQUANTS_API_KEY", ""),
             email=os.environ.get("JQUANTS_EMAIL", ""),
             password=os.environ.get("JQUANTS_PASSWORD", ""),
-            base_url=os.environ.get("JQUANTS_BASE_URL", "https://api.jquants.com/v1"),
+            base_url=os.environ.get("JQUANTS_BASE_URL", "https://api.jquants.com/v2"),
+            use_official_client=os.environ.get("JQUANTS_USE_OFFICIAL_CLIENT", "").lower() in ("1", "true", "yes"),
         )
 
 
@@ -63,11 +69,13 @@ class KabuStationSettings:
 class DatabaseSettings:
     """データベース設定。"""
     cache_db_path: str = "./data_cache.db"
+    journal_db_path: str = "./trade_journal.db"
 
     @classmethod
     def from_env(cls) -> "DatabaseSettings":
         return cls(
             cache_db_path=os.environ.get("TRADER_CACHE_DB_PATH", "./data_cache.db"),
+            journal_db_path=os.environ.get("TRADER_JOURNAL_DB_PATH", "./trade_journal.db"),
         )
 
 

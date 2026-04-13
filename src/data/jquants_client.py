@@ -1,6 +1,7 @@
 """J-Quants API クライアント。
 
-認証フロー: メールアドレス+パスワード → リフレッシュトークン → IDトークン → 株価取得
+認証フロー（V2）: APIキー → リフレッシュトークン → IDトークン → 株価取得
+認証フロー（V1、非推奨）: メールアドレス+パスワード → リフレッシュトークン → IDトークン → 株価取得
 全APIキー情報は環境変数から取得する（ハードコード禁止）。
 
 API仕様: https://jpx-jquants.com/
@@ -9,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
+import warnings
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -31,6 +33,8 @@ class JQuantsError(Exception):
 class JQuantsClient:
     """J-Quants API クライアント。
 
+    V2 APIキー認証（推奨）またはV1メール/パスワード認証（非推奨）をサポートする。
+
     Parameters
     ----------
     settings:
@@ -44,12 +48,44 @@ class JQuantsClient:
         self._session = requests.Session()
 
     def _get_refresh_token(self) -> str:
-        """リフレッシュトークンを取得する（メール/パスワード認証）。"""
-        if not self._settings.email or not self._settings.password:
+        """リフレッシュトークンを取得する。
+
+        V2 APIキーが設定されている場合はV2認証を使用する。
+        V1メール/パスワードが設定されている場合はV1認証（非推奨）を使用する。
+        どちらも設定されていない場合はエラーを発生させる。
+        """
+        if self._settings.api_key:
+            return self._get_refresh_token_v2()
+        elif self._settings.email and self._settings.password:
+            return self._get_refresh_token_v1()
+        else:
             raise JQuantsError(
                 "J-Quants認証情報が設定されていません。"
-                "環境変数 JQUANTS_EMAIL, JQUANTS_PASSWORD を設定してください。"
+                "環境変数 JQUANTS_API_KEY（推奨）または"
+                " JQUANTS_EMAIL と JQUANTS_PASSWORD を設定してください。"
             )
+
+    def _get_refresh_token_v2(self) -> str:
+        """V2 APIキーを使ってリフレッシュトークンを取得する。"""
+        url = f"{self._settings.base_url}/token/auth_user"
+        payload = {"apikey": self._settings.api_key}
+
+        response = self._request_with_retry("POST", url, json=payload, auth_required=False)
+        data = response.json()
+
+        if "refreshToken" not in data:
+            raise JQuantsError(f"リフレッシュトークン取得失敗（V2）: {data}")
+
+        return str(data["refreshToken"])
+
+    def _get_refresh_token_v1(self) -> str:
+        """V1メール/パスワードを使ってリフレッシュトークンを取得する（非推奨）。"""
+        warnings.warn(
+            "J-Quants V1認証（メール/パスワード）は非推奨です。"
+            "JQUANTS_API_KEY 環境変数を使用したV2認証に移行してください。",
+            DeprecationWarning,
+            stacklevel=3,
+        )
 
         url = f"{self._settings.base_url}/token/auth_user"
         payload = {
@@ -61,7 +97,7 @@ class JQuantsClient:
         data = response.json()
 
         if "refreshToken" not in data:
-            raise JQuantsError(f"リフレッシュトークン取得失敗: {data}")
+            raise JQuantsError(f"リフレッシュトークン取得失敗（V1）: {data}")
 
         return str(data["refreshToken"])
 
