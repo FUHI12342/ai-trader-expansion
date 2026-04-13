@@ -72,7 +72,7 @@ def run_backtest(
     position_size_pct: float = 1.0,   # ポジションサイズ（資産の何%を使うか）
     allow_short: bool = False,
     risk_free_rate: float = 0.0,
-    periods_per_year: int = 252,
+    periods_per_year: Optional[int] = None,
 ) -> BacktestResult:
     """イベントドリブンバックテストを実行する。
 
@@ -104,6 +104,10 @@ def run_backtest(
     BacktestResult
         バックテスト結果
     """
+    # 年間取引日数のデフォルト処理（株式: 252, 暗号資産呼び出し元: 365を渡す）
+    if periods_per_year is None:
+        periods_per_year = 252
+
     # シグナル生成（元データは変更しない）
     signals = strategy.generate_signals(data)
 

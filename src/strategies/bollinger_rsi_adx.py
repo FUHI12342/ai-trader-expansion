@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from typing import Dict
+
 import numpy as np
 import pandas as pd
 
@@ -99,6 +101,15 @@ class BollingerRSIADXStrategy(BaseStrategy):
         self.rsi_period = rsi_period
         self.adx_period = adx_period
         self.adx_threshold = adx_threshold
+
+    def parameter_space(self) -> Dict[str, tuple]:
+        """最適化パラメータ空間を返す。"""
+        return {
+            "bb_period": (int, 10, 30),
+            "rsi_period": (int, 7, 21),
+            "adx_period": (int, 7, 21),
+            "adx_threshold": (float, 20.0, 35.0),
+        }
 
     def _min_bars(self) -> int:
         return max(self.bb_period, self.adx_period) * 2 + 1

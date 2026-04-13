@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from typing import Dict
+
 import pandas as pd
 
 from .base import BaseStrategy, SignalType
@@ -37,6 +39,13 @@ class DualMomentumStrategy(BaseStrategy):
         self.lookback_period = lookback_period
         self.threshold = threshold
         self.rebalance_freq = rebalance_freq
+
+    def parameter_space(self) -> Dict[str, tuple]:
+        """最適化パラメータ空間を返す。"""
+        return {
+            "lookback_period": (int, 60, 504),
+            "rebalance_period": (int, 5, 30),
+        }
 
     def _min_bars(self) -> int:
         return self.lookback_period + 1

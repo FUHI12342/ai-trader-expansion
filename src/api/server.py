@@ -76,13 +76,54 @@ _paper_broker = PaperBroker.load_state(
     fallback_balance=_settings.initial_capital,
 )
 
-# 全戦略の登録
-_strategies = {
+# 全戦略の登録（コア戦略）
+_strategies: Dict[str, Any] = {
     "ma_crossover": MACrossoverStrategy(),
     "dual_momentum": DualMomentumStrategy(),
     "macd_rsi": MACDRSIStrategy(),
     "bollinger_rsi_adx": BollingerRSIADXStrategy(),
 }
+
+# ML戦略（オプション依存: lightgbm）
+try:
+    from src.strategies.lgbm_predictor import LGBMPredictorStrategy
+    _strategies["lgbm_predictor"] = LGBMPredictorStrategy()
+except ImportError:
+    logger.warning("LGBMPredictorStrategy: lightgbm not installed")
+
+# ML戦略（オプション依存: darts）
+try:
+    from src.strategies.darts_nbeats import DartsNBEATSStrategy
+    _strategies["darts_nbeats"] = DartsNBEATSStrategy()
+except ImportError:
+    logger.warning("DartsNBEATSStrategy: darts not installed")
+
+try:
+    from src.strategies.darts_tft import DartsTFTStrategy
+    _strategies["darts_tft"] = DartsTFTStrategy()
+except ImportError:
+    logger.warning("DartsTFTStrategy: darts not installed")
+
+# ML戦略（オプション依存: skforecast）
+try:
+    from src.strategies.skforecast_lgbm import SkforecastLGBMStrategy
+    _strategies["skforecast_lgbm"] = SkforecastLGBMStrategy()
+except ImportError:
+    logger.warning("SkforecastLGBMStrategy: skforecast not installed")
+
+# ML戦略（オプション依存: chronos）
+try:
+    from src.strategies.chronos_strategy import ChronosStrategy
+    _strategies["chronos"] = ChronosStrategy()
+except ImportError:
+    logger.warning("ChronosStrategy: chronos not installed")
+
+# ML戦略（オプション依存: nixtla）
+try:
+    from src.strategies.nixtla_ensemble import NixtlaEnsembleStrategy
+    _strategies["nixtla_ensemble"] = NixtlaEnsembleStrategy()
+except ImportError:
+    logger.warning("NixtlaEnsembleStrategy: nixtla not installed")
 
 
 # ============================================================

@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+from typing import Dict
+
 import numpy as np
 import pandas as pd
 
@@ -65,6 +67,15 @@ class MACDRSIStrategy(BaseStrategy):
         self.rsi_period = rsi_period
         self.rsi_overbought = rsi_overbought
         self.rsi_oversold = rsi_oversold
+
+    def parameter_space(self) -> Dict[str, tuple]:
+        """最適化パラメータ空間を返す。"""
+        return {
+            "fast_period": (int, 8, 20),
+            "slow_period": (int, 20, 40),
+            "signal_period": (int, 5, 15),
+            "rsi_period": (int, 7, 21),
+        }
 
     def _min_bars(self) -> int:
         return self.macd_slow + self.macd_signal + 1

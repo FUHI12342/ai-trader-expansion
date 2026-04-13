@@ -18,9 +18,10 @@ class OrderSide(str, Enum):
 
 class OrderType(str, Enum):
     """注文種別。"""
-    MARKET = "market"    # 成行
-    LIMIT = "limit"      # 指値
-    STOP = "stop"        # 逆指値
+    MARKET = "market"          # 成行
+    LIMIT = "limit"            # 指値
+    STOP = "stop"              # 逆指値
+    STOP_LIMIT = "stop_limit"  # 逆指値＋指値（新規）
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,10 @@ class Order:
     created_at: str = ""
     updated_at: str = ""
 
+    asset_class: str = ""        # "STOCK", "CRYPTO", "FUTURES", "BOND_ETF"
+    exchange: str = ""           # "TSE", "GMO", "bitFlyer", "OSE"
+    leverage: float = 1.0        # 1.0 はスポット、>1 はマージン/先物
+
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
@@ -52,6 +57,11 @@ class Position:
     current_price: float             # 現在価格
     unrealized_pnl: float            # 含み損益
     unrealized_pnl_pct: float        # 含み損益率（%）
+    asset_class: str = ""
+    exchange: str = ""
+    leverage: float = 1.0
+    liquidation_price: float = 0.0    # 0 = 非適用（スポット）
+    margin_requirement: float = 0.0   # 必要証拠金（通貨単位）
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

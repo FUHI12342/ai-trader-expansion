@@ -7,7 +7,7 @@ Walk-Forward方式でtrain/predict分離（未来データ漏洩を防止）
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -138,6 +138,14 @@ class LGBMPredictorStrategy(BaseStrategy):
             "bagging_freq": 5,
             "random_state": 42,
             "verbose": -1,
+        }
+
+    def parameter_space(self) -> Dict[str, tuple]:
+        """最適化パラメータ空間を返す。"""
+        return {
+            "n_estimators": (int, 50, 500),
+            "learning_rate": (float, 0.01, 0.3),
+            "train_window": (int, 126, 504),
         }
 
     def _min_bars(self) -> int:

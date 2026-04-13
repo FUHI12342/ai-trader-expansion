@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+from typing import Dict
+
 import pandas as pd
 
 from .base import BaseStrategy, SignalType
@@ -34,6 +36,13 @@ class MACrossoverStrategy(BaseStrategy):
         self.short_window = short_window
         self.long_window = long_window
         self.price_col = price_col
+
+    def parameter_space(self) -> Dict[str, tuple]:
+        """最適化パラメータ空間を返す。"""
+        return {
+            "fast_period": (int, 5, 50),
+            "slow_period": (int, 20, 200),
+        }
 
     def _min_bars(self) -> int:
         return self.long_window + 1

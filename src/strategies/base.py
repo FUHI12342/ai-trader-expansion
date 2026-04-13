@@ -89,6 +89,17 @@ class BaseStrategy(ABC):
             object.__setattr__(new_instance, key, val)
         return new_instance
 
+    def parameter_space(self) -> Dict[str, tuple]:
+        """最適化可能パラメータとその範囲を返す。
+
+        Returns
+        -------
+        Dict[str, tuple]
+            {param_name: (type, min_value, max_value)}
+            空辞書の場合はパラメータ最適化非対応。
+        """
+        return {}
+
     @abstractmethod
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
         """シグナルを生成する（実装必須）。

@@ -37,18 +37,30 @@ class PaperBroker(BrokerBase):
         fee_rate: float = 0.001,
         slippage_rate: float = 0.0005,
         journal: Optional[TradeJournal] = None,
+        fee_schedule: Optional[Dict[str, float]] = None,  # {"STOCK": 0.001, "CRYPTO": 0.0005, ...}
     ) -> None:
         self._balance = initial_balance
         self._initial_balance = initial_balance
         self._fee_rate = fee_rate
         self._slippage_rate = slippage_rate
         self._journal = journal
+        self._fee_schedule: Dict[str, float] = fee_schedule or {}
 
         # 可変状態（ミュータブルだがブローカー内部状態として管理）
         self._positions: Dict[str, dict] = {}      # {symbol: {"quantity": float, "avg_price": float}}
         self._orders: Dict[str, Order] = {}        # {order_id: Order}
         self._current_prices: Dict[str, float] = {}
         self._order_history: List[Order] = []
+
+    def _get_fee_rate(self, asset_class: str = "") -> float:
+        """アセットクラスに基づく手数料率を返す。
+
+        fee_schedule に一致するアセットクラスがあればその率を使い、
+        なければデフォルトの fee_rate を返す。
+        """
+        if asset_class and self._fee_schedule and asset_class in self._fee_schedule:
+            return self._fee_schedule[asset_class]
+        return self._fee_rate
 
     def update_price(self, symbol: str, price: float) -> None:
         """現在価格を更新する（バックテストやライブ接続から呼び出す）。"""
@@ -119,7 +131,7 @@ class PaperBroker(BrokerBase):
         else:
             exec_price = current_price * (1 - self._slippage_rate)
 
-        fee = exec_price * quantity * self._fee_rate
+        fee = exec_price * quantity * self._get_fee_rate()
         total_cost = exec_price * quantity
 
         if side == OrderSide.BUY:
