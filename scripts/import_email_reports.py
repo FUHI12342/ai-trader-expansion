@@ -7,12 +7,13 @@ orders/daily_pnl/snapshots テーブルに書き込む。
 使用方法:
     python scripts/import_email_reports.py --dir ~/Downloads/ --db ./trade_journal.db
     python scripts/import_email_reports.py --eml path/to/file.eml
-    python scripts/import_email_reports.py --gmail  # Gmail MCP 統合プレースホルダー
+    python scripts/import_email_reports.py --gmail --email user@gmail.com --app-password xxxx
 """
 from __future__ import annotations
 
 import argparse
 import email
+import imaplib
 import logging
 import os
 import re
@@ -465,6 +466,106 @@ def find_eml_files(directory: str | Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
+# Gmail IMAP 一括取得
+# ---------------------------------------------------------------------------
+
+def fetch_reports_from_gmail(
+    email_addr: str,
+    app_password: str,
+    search_query: str = 'SUBJECT "Trading Report"',
+    max_results: int = 200,
+) -> list[tuple[str, str, str]]:
+    """Gmail IMAP 経由でトレードレポートメールを一括取得する。
+
+    Parameters
+    ----------
+    email_addr:
+        Gmail アドレス。
+    app_password:
+        Google アプリパスワード（16文字、スペースなし）。
+    search_query:
+        IMAP 検索クエリ（デフォルト: 件名に "Trading Report" を含む）。
+    max_results:
+        取得する最大メール数。
+
+    Returns
+    -------
+    list[tuple[str, str, str]]
+        (date_iso, session, decoded_body) のリスト。
+    """
+    logger.info("Gmail IMAP に接続中... (%s)", email_addr)
+    imap = imaplib.IMAP4_SSL("imap.gmail.com", 993)
+
+    try:
+        imap.login(email_addr, app_password)
+        logger.info("Gmail IMAP 認証成功")
+
+        imap.select('"[Gmail]/All Mail"')
+
+        _status, msg_ids_data = imap.search(None, search_query)
+        msg_ids = msg_ids_data[0].split()
+
+        if not msg_ids:
+            # フォールバック: INBOX を検索
+            imap.select("INBOX")
+            _status, msg_ids_data = imap.search(None, search_query)
+            msg_ids = msg_ids_data[0].split()
+
+        if not msg_ids:
+            logger.warning("該当するメールが見つかりませんでした")
+            return []
+
+        # 最新の max_results 件に制限
+        msg_ids = msg_ids[-max_results:]
+        logger.info("%d 件のメールを取得します", len(msg_ids))
+
+        results: list[tuple[str, str, str]] = []
+        for msg_id in msg_ids:
+            _status, msg_data = imap.fetch(msg_id, "(RFC822)")
+            if not msg_data or not msg_data[0]:
+                continue
+
+            raw_email = msg_data[0]
+            if isinstance(raw_email, tuple) and len(raw_email) >= 2:
+                raw_bytes = raw_email[1]
+            else:
+                continue
+
+            msg = email.message_from_bytes(raw_bytes)
+            subject: str = msg.get("Subject", "")
+
+            m = _SUBJECT_RE.search(subject)
+            if not m:
+                logger.debug("スキップ（件名不一致）: %s", subject)
+                continue
+
+            session = m.group(1).lower()
+            date_iso = _yyyymmdd_to_iso(m.group(2))
+
+            body = ""
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    payload = part.get_payload(decode=True)
+                    if isinstance(payload, bytes):
+                        charset = part.get_content_charset() or "utf-8"
+                        body = payload.decode(charset, errors="replace")
+                    break
+
+            if body:
+                results.append((date_iso, session, body))
+                logger.debug("取得: %s %s", date_iso, session)
+
+        logger.info("%d 件のレポートを取得しました", len(results))
+        return results
+
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # CLI エントリーポイント
 # ---------------------------------------------------------------------------
 
@@ -486,13 +587,29 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--gmail",
         action="store_true",
-        help="Gmail MCP 統合プレースホルダー（将来実装）",
+        help="Gmail IMAP 経由で一括取得（--email と --app-password が必要）",
     )
     parser.add_argument(
         "--db",
         default="./trade_journal.db",
         metavar="DB_PATH",
         help="SQLite DB ファイルのパス（デフォルト: ./trade_journal.db）",
+    )
+    parser.add_argument(
+        "--email",
+        metavar="ADDR",
+        help="Gmail アドレス（--gmail 使用時。環境変数 GMAIL_ADDRESS でも可）",
+    )
+    parser.add_argument(
+        "--app-password",
+        metavar="PASS",
+        help="Google アプリパスワード（--gmail 使用時。環境変数 GMAIL_APP_PASSWORD でも可）",
+    )
+    parser.add_argument(
+        "--max-results",
+        type=int,
+        default=200,
+        help="Gmail から取得する最大メール数（デフォルト: 200）",
     )
     parser.add_argument(
         "--verbose",
@@ -532,28 +649,49 @@ def main(argv: Optional[list[str]] = None) -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    if args.gmail:
-        print(
-            "Gmail MCP 統合は将来実装予定です。\n"
-            "現在は --dir または --eml オプションを使用してください。"
-        )
-        return 0
-
     db_path = args.db
     journal = TradeJournal(db_path=db_path)
 
     try:
         total = 0
-        if args.eml:
+
+        if args.gmail:
+            # Gmail IMAP 一括取得モード
+            gmail_addr = args.email or os.environ.get("GMAIL_ADDRESS", "")
+            gmail_pass = args.app_password or os.environ.get("GMAIL_APP_PASSWORD", "")
+            if not gmail_addr or not gmail_pass:
+                print(
+                    "エラー: --gmail には --email と --app-password が必要です。\n"
+                    "  環境変数 GMAIL_ADDRESS / GMAIL_APP_PASSWORD でも設定可能です。\n\n"
+                    "アプリパスワードの取得方法:\n"
+                    "  1. https://myaccount.google.com/apppasswords にアクセス\n"
+                    "  2. 「アプリ名」に任意の名前を入力して「作成」\n"
+                    "  3. 表示された16文字のパスワードを使用\n"
+                    "  ※ 2段階認証が有効である必要があります"
+                )
+                return 1
+
+            reports = fetch_reports_from_gmail(
+                gmail_addr, gmail_pass, max_results=args.max_results,
+            )
+            for date_iso, session, body in reports:
+                records = parse_report_body(body, date_iso, session)
+                count = import_records_to_db(records, journal)
+                logger.info("%s %s: %d レコード", date_iso, session, count)
+                total += count
+
+        elif args.eml:
             eml_files = [Path(args.eml)]
+            for eml_path in eml_files:
+                total += _process_eml(eml_path, journal)
+
         else:
             eml_files = find_eml_files(args.dir)
             if not eml_files:
                 logger.warning("EML ファイルが見つかりませんでした: %s", args.dir)
                 return 0
-
-        for eml_path in eml_files:
-            total += _process_eml(eml_path, journal)
+            for eml_path in eml_files:
+                total += _process_eml(eml_path, journal)
 
         print(f"合計 {total} レコードをインポートしました → {db_path}")
         return 0
