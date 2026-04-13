@@ -469,6 +469,23 @@ def find_eml_files(directory: str | Path) -> list[Path]:
 # Gmail IMAP 一括取得
 # ---------------------------------------------------------------------------
 
+def _find_gmail_all_mail(imap: imaplib.IMAP4_SSL) -> Optional[str]:
+    """Gmail の "All Mail" フォルダ名を \\All フラグから自動検出する。"""
+    status, folder_list = imap.list()
+    if status != "OK" or not folder_list:
+        return None
+    for entry in folder_list:
+        if not isinstance(entry, bytes):
+            continue
+        decoded = entry.decode("utf-8", errors="replace")
+        if "\\All" in decoded:
+            # フォルダ名を抽出: 例 '(\\HasNoChildren \\All) "/" "[Gmail]/All Mail"'
+            m = re.search(r'"([^"]+)"$', decoded)
+            if m:
+                return f'"{m.group(1)}"'
+    return None
+
+
 def fetch_reports_from_gmail(
     email_addr: str,
     app_password: str,
@@ -500,16 +517,20 @@ def fetch_reports_from_gmail(
         imap.login(email_addr, app_password)
         logger.info("Gmail IMAP 認証成功")
 
-        imap.select('"[Gmail]/All Mail"')
-
-        _status, msg_ids_data = imap.search(None, search_query)
-        msg_ids = msg_ids_data[0].split()
-
-        if not msg_ids:
-            # フォールバック: INBOX を検索
-            imap.select("INBOX")
+        # Gmail "All Mail" フォルダを自動検出（言語非依存）
+        all_mail_folder = _find_gmail_all_mail(imap)
+        msg_ids: list[bytes] = []
+        for folder in [all_mail_folder, "INBOX"] if all_mail_folder else ["INBOX"]:
+            status, _ = imap.select(folder)
+            if status != "OK":
+                logger.debug("フォルダ選択失敗: %s", folder)
+                continue
+            logger.debug("フォルダ選択成功: %s", folder)
             _status, msg_ids_data = imap.search(None, search_query)
             msg_ids = msg_ids_data[0].split()
+            if msg_ids:
+                logger.info("フォルダ %s で %d 件のメールを発見", folder, len(msg_ids))
+                break
 
         if not msg_ids:
             logger.warning("該当するメールが見つかりませんでした")
