@@ -391,7 +391,7 @@ class AutoTrader:
         self._maybe_scale_up(broker)
 
     def _daily_report(self, broker: Any) -> None:
-        """日次レポートを送信する。"""
+        """日次レポートを送信する。検証ステータス判定を含む。"""
         balance = broker.get_balance()
         pnl = balance - self._config["initial_capital"]
         pnl_pct = pnl / self._config["initial_capital"] * 100
@@ -399,19 +399,91 @@ class AutoTrader:
         summary = self._oms.summary()
         uptime = (time.time() - self._start_time) / 3600
 
+        # 検証ステータス判定
+        total_trades = len(filled)
+        wins = sum(1 for o in filled if getattr(o, 'avg_fill_price', 0) > 0)
+        win_rate = wins / total_trades * 100 if total_trades > 0 else 0
+
+        import numpy as np
+        sharpe = 0.0
+        if len(self._daily_pnls) >= 5:
+            arr = np.array(self._daily_pnls)
+            if np.std(arr) > 0:
+                sharpe = float(np.mean(arr) / np.std(arr) * np.sqrt(252))
+
+        status = self._verification_status(total_trades, win_rate, sharpe)
+        title = f"[{status['label']}] AI Trader 日次レポート"
+
         report = (
+            f"== 検証ステータス: {status['label']} ==\n"
+            f"{status['detail']}\n"
+            f"\n"
             f"残高: {balance:,.0f}円 (PnL: {pnl:+,.0f}円 / {pnl_pct:+.2f}%)\n"
-            f"約定: {len(filled)}件 / OMS: {summary}\n"
-            f"ドリフト: {self._drift.update_count}回チェック\n"
+            f"取引: {total_trades}件 (勝率: {win_rate:.0f}%)\n"
+            f"Sharpe(推定): {sharpe:.2f}\n"
+            f"OMS: {summary}\n"
             f"稼働時間: {uptime:.1f}時間"
         )
 
         self._notifier.send(TradingEvent(
             event_type=EventType.DAILY_SUMMARY,
-            title="日次レポート",
+            title=title,
             message=report,
-            data={"balance": balance, "pnl": pnl},
+            data={
+                "balance": balance, "pnl": pnl,
+                "total_trades": total_trades, "win_rate": win_rate,
+                "sharpe": sharpe, "verification": status,
+            },
         ))
+
+    @staticmethod
+    def _verification_status(
+        total_trades: int, win_rate: float, sharpe: float
+    ) -> Dict[str, Any]:
+        """検証ステータスを判定する。
+
+        Returns
+        -------
+        Dict[str, Any]
+            label: ステータスラベル
+            ready: 実運用移行可能か
+            detail: 詳細説明
+        """
+        # 理想ライン: 100取引 + 勝率60% + Sharpe>0.5
+        if total_trades >= 100 and win_rate >= 60 and sharpe > 0.5:
+            return {
+                "label": "IDEAL - 実運用移行可能(理想)",
+                "ready": True,
+                "level": "ideal",
+                "detail": f"100取引達成 (勝率{win_rate:.0f}%, Sharpe{sharpe:.2f}) — 十分な統計的根拠あり。自信を持って実運用可能。",
+            }
+
+        # 推奨ライン: 50取引 + 勝率55% + Sharpe>0.3
+        if total_trades >= 50 and win_rate >= 55 and sharpe > 0.3:
+            return {
+                "label": "RECOMMENDED - 実運用移行可能(推奨)",
+                "ready": True,
+                "level": "recommended",
+                "detail": f"50取引達成 (勝率{win_rate:.0f}%, Sharpe{sharpe:.2f}) — 安定性を確認。実運用に移行可能。",
+            }
+
+        # 最低ライン: 30取引 + 勝率50% + Sharpe>0
+        if total_trades >= 30 and win_rate >= 50 and sharpe > 0:
+            return {
+                "label": "MINIMUM - 実運用移行可能(最低)",
+                "ready": True,
+                "level": "minimum",
+                "detail": f"30取引達成 (勝率{win_rate:.0f}%, Sharpe{sharpe:.2f}) — 最低条件クリア。小額から実運用開始可。",
+            }
+
+        # 条件未達
+        remaining = max(0, 30 - total_trades)
+        return {
+            "label": f"PAPER - 検証中 (残{remaining}取引)",
+            "ready": False,
+            "level": "paper",
+            "detail": f"取引{total_trades}/30件 (勝率{win_rate:.0f}%, Sharpe{sharpe:.2f}) — 最低ライン到達まであと{remaining}取引。",
+        }
 
     def _maybe_scale_up(self, broker: Any) -> None:
         """Step 4: パフォーマンスに応じて自動スケールアップ。

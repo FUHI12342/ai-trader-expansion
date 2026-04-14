@@ -82,3 +82,36 @@ class TestScaleUp:
         trader._maybe_scale_up(broker)
 
         assert trader._current_capital_pct > initial_pct
+
+
+class TestVerificationStatus:
+
+    def test_paper_status(self) -> None:
+        s = AutoTrader._verification_status(5, 60.0, 0.5)
+        assert s["level"] == "paper"
+        assert not s["ready"]
+
+    def test_minimum_status(self) -> None:
+        s = AutoTrader._verification_status(30, 55.0, 0.3)
+        assert s["level"] == "minimum"
+        assert s["ready"]
+
+    def test_recommended_status(self) -> None:
+        s = AutoTrader._verification_status(50, 60.0, 0.5)
+        assert s["level"] == "recommended"
+        assert s["ready"]
+
+    def test_ideal_status(self) -> None:
+        s = AutoTrader._verification_status(100, 65.0, 0.8)
+        assert s["level"] == "ideal"
+        assert s["ready"]
+
+    def test_high_trades_low_winrate_stays_paper(self) -> None:
+        s = AutoTrader._verification_status(50, 40.0, 0.5)
+        assert s["level"] == "paper"
+        assert not s["ready"]
+
+    def test_high_trades_negative_sharpe_stays_paper(self) -> None:
+        s = AutoTrader._verification_status(30, 55.0, -0.1)
+        assert s["level"] == "paper"
+        assert not s["ready"]
