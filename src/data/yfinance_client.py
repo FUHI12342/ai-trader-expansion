@@ -6,10 +6,12 @@ DataFrameはimmutableパターンで返す。
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
+
+from .source_base import DataSourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +45,7 @@ def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-class YFinanceClient:
+class YFinanceClient(DataSourceBase):
     """yfinanceラッパークライアント。
 
     Parameters
@@ -51,6 +53,8 @@ class YFinanceClient:
     cache_enabled:
         キャッシュを有効にするか（DataManagerのSQLiteキャッシュを使う場合はFalse）
     """
+
+    name = "yfinance"
 
     def __init__(self, cache_enabled: bool = False) -> None:
         if not HAS_YFINANCE:
@@ -157,6 +161,35 @@ class YFinanceClient:
             except Exception as e:
                 logger.warning(f"{sym} の取得に失敗しました: {e}")
         return results
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """銘柄をサポートするか判定する。
+
+        暗号資産（"/" を含む）以外の銘柄をサポートする。
+        日本株（.T）、米国株、ETF等を対象とする。
+
+        Parameters
+        ----------
+        symbol:
+            銘柄シンボル
+
+        Returns
+        -------
+        bool
+            サポートする場合は True
+        """
+        # 暗号資産の "/" 形式はCCXT担当
+        return "/" not in symbol
+
+    def supported_intervals(self) -> list[str]:
+        """サポートする時間足一覧を返す。
+
+        Returns
+        -------
+        list[str]
+            サポートする時間足のリスト
+        """
+        return ["1d", "1wk", "1mo"]
 
     def clear_cache(self) -> None:
         """メモリキャッシュをクリアする。"""

@@ -17,6 +17,7 @@ import requests
 import pandas as pd
 
 from config.settings import JQuantsSettings
+from .source_base import DataSourceBase
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class JQuantsError(Exception):
     pass
 
 
-class JQuantsClient:
+class JQuantsClient(DataSourceBase):
     """J-Quants API クライアント。
 
     V2 APIキー認証（推奨）またはV1メール/パスワード認証（非推奨）をサポートする。
@@ -40,6 +41,8 @@ class JQuantsClient:
     settings:
         J-Quants設定（省略時は環境変数から読み込み）
     """
+
+    name = "jquants"
 
     def __init__(self, settings: Optional[JQuantsSettings] = None) -> None:
         self._settings = settings or JQuantsSettings.from_env()
@@ -269,6 +272,78 @@ class JQuantsClient:
             raise JQuantsError(f"上場銘柄取得失敗: {data}")
 
         return pd.DataFrame(data["info"]).copy()
+
+    def fetch_ohlcv(self, symbol: str, start: str, end: str, interval: str = "1d") -> pd.DataFrame:
+        """OHLCV データを取得する（DataSourceBase ABC実装）。
+
+        Parameters
+        ----------
+        symbol:
+            銘柄コード（例: "7203.T" または "7203"）
+        start:
+            開始日（"YYYY-MM-DD"形式）
+        end:
+            終了日（"YYYY-MM-DD"形式）
+        interval:
+            データ間隔（"1d" のみサポート）
+
+        Returns
+        -------
+        pd.DataFrame
+            OHLCV DataFrame（DatetimeIndex）
+
+        Raises
+        ------
+        ValueError
+            "1d" 以外のインターバルが指定された場合
+        """
+        if interval != "1d":
+            raise ValueError(
+                f"J-Quantsは日次データのみサポートしています。"
+                f"指定されたインターバル: {interval!r}. 対応: ['1d']"
+            )
+        # ".T" や ".JP" サフィックスを除去して4桁コードに変換
+        code = symbol.replace(".T", "").replace(".JP", "")
+        df = self.fetch_stock_prices(code, start, end)
+
+        # adj_close が存在する場合は close に使用
+        if "adj_close" in df.columns and df["adj_close"].notna().any():
+            df = df.copy()
+            df["close"] = df["adj_close"]
+
+        return df
+
+    def supports_symbol(self, symbol: str) -> bool:
+        """銘柄をサポートするか判定する。
+
+        日本株コード（4桁数字、または .T/.JP サフィックス付き）をサポートする。
+
+        Parameters
+        ----------
+        symbol:
+            銘柄シンボル
+
+        Returns
+        -------
+        bool
+            日本株コードの場合は True
+        """
+        # ".T" または ".JP" サフィックス付き
+        if symbol.endswith(".T") or symbol.endswith(".JP"):
+            return True
+        # 4桁数字のみ（日本株コード）
+        code = symbol.replace(".T", "").replace(".JP", "")
+        return code.isdigit() and len(code) == 4
+
+    def supported_intervals(self) -> list[str]:
+        """サポートする時間足一覧を返す。
+
+        Returns
+        -------
+        list[str]
+            J-Quantsは日次のみサポート
+        """
+        return ["1d"]
 
     def close(self) -> None:
         """セッションをクローズする。"""

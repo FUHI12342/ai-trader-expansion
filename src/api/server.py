@@ -482,6 +482,122 @@ async def post_snapshot(
     return {"status": "ok"}
 
 
+# ============================================================
+# 最適化エンドポイント (Phase 2)
+# ============================================================
+
+class OptimizeRequest(BaseModel):
+    """最適化リクエスト。"""
+    strategy_name: str = Field(..., description="戦略名")
+    symbol: str = Field("7203.T", description="銘柄コード")
+    start_date: str = Field(..., description="開始日 (YYYY-MM-DD)")
+    end_date: Optional[str] = Field(None, description="終了日")
+    n_trials: int = Field(30, ge=2, le=500, description="試行回数")
+    objective_metric: str = Field(
+        "consistency_ratio",
+        description="最適化指標 (consistency_ratio, combined_score, etc.)",
+    )
+    in_sample_days: int = Field(504, ge=60, description="インサンプル日数")
+    out_of_sample_days: int = Field(126, ge=20, description="アウトオブサンプル日数")
+
+
+class OptimizeResponse(BaseModel):
+    """最適化レスポンス。"""
+    strategy_name: str
+    best_params: Dict[str, Any]
+    best_value: float
+    n_trials: int
+    n_complete: int
+    n_pruned: int
+    objective_metric: str
+    walk_forward_summary: Optional[Dict[str, Any]] = None
+
+
+@app.post(
+    "/api/optimize",
+    response_model=OptimizeResponse,
+    summary="戦略パラメータ最適化",
+)
+async def run_optimization(
+    request: OptimizeRequest,
+    _: None = Depends(_verify_api_key),
+) -> OptimizeResponse:
+    """指定された戦略のパラメータを Optuna で最適化する。
+
+    Walk-Forward OOS consistency_ratio を最大化し、過学習を防止する。
+    """
+    strategy = _strategies.get(request.strategy_name)
+    if strategy is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"戦略 '{request.strategy_name}' が見つかりません。"
+                   f"利用可能: {list(_strategies.keys())}",
+        )
+
+    if not strategy.parameter_space():
+        raise HTTPException(
+            status_code=400,
+            detail=f"戦略 '{request.strategy_name}' は最適化パラメータがありません。",
+        )
+
+    try:
+        from src.optimization.optuna_optimizer import OptunaOptimizer
+    except ImportError:
+        raise HTTPException(status_code=500, detail="optuna が未インストールです")
+
+    # データ取得
+    try:
+        dm = DataManager()
+        data = dm.fetch_ohlcv(request.symbol, request.start_date, request.end_date)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"データ取得失敗: {str(e)[:200]}")
+
+    if data.empty:
+        raise HTTPException(status_code=422, detail="データが存在しません")
+
+    # 最適化実行
+    try:
+        optimizer = OptunaOptimizer(
+            strategy=strategy,
+            n_trials=request.n_trials,
+            objective_metric=request.objective_metric,
+        )
+        result = optimizer.optimize(
+            data=data,
+            symbol=request.symbol,
+            in_sample_days=request.in_sample_days,
+            out_of_sample_days=request.out_of_sample_days,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("最適化エラー: %s", e)
+        raise HTTPException(status_code=500, detail="最適化中にエラーが発生しました")
+
+    # WF サマリー抽出
+    wf_summary = None
+    if result.walk_forward_result:
+        wf = result.walk_forward_result
+        wf_summary = {
+            "num_walks": wf.get("num_walks"),
+            "oos_avg_return": wf.get("out_of_sample_avg_return"),
+            "oos_sharpe_avg": wf.get("oos_sharpe_avg"),
+            "consistency_ratio": wf.get("consistency_ratio"),
+            "is_significant": wf.get("is_statistically_significant"),
+        }
+
+    return OptimizeResponse(
+        strategy_name=result.strategy_name,
+        best_params=result.best_params,
+        best_value=result.best_value,
+        n_trials=result.n_trials,
+        n_complete=result.n_complete,
+        n_pruned=result.n_pruned,
+        objective_metric=result.objective_metric,
+        walk_forward_summary=wf_summary,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     settings = get_settings()
