@@ -34,7 +34,7 @@ class TestAutoTraderInit:
         config["mode"] = "paper"
         trader = AutoTrader(config)
         assert trader._running is False
-        assert trader._current_capital_pct == 5.0
+        assert trader._current_capital_pct == config["capital_pct"]
 
     def test_init_components(self) -> None:
         config = dict(DEFAULT_CONFIG)
@@ -72,6 +72,8 @@ class TestScaleUp:
     def test_scale_up_triggered(self) -> None:
         config = dict(DEFAULT_CONFIG)
         config["scale_up_sharpe_threshold"] = 0.1
+        config["capital_pct"] = 5.0
+        config["scale_up_max_capital_pct"] = 50.0
         trader = AutoTrader(config)
         # 一貫して正のPnL → 高Sharpe
         trader._daily_pnls = [1000.0 + i * 10 for i in range(30)]

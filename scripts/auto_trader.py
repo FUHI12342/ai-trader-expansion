@@ -40,6 +40,9 @@ from src.notifications.router import (
 from src.risk.drawdown_controller import DrawdownController, DrawdownAction
 from src.risk.correlation_monitor import CorrelationMonitor
 from src.risk.portfolio_optimizer import PortfolioOptimizer
+from src.risk.position_sizer import PositionSizer
+from src.strategies.funding_arb import FundingArbStrategy, FundingRateCollector
+from src.strategies.grid_trading import GridTradingStrategy
 from src.trading.oms import OrderManagementSystem
 
 logger = logging.getLogger(__name__)
@@ -51,16 +54,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = {
     "mode": "paper",
-    "symbols": ["7203.T", "9984.T", "6758.T"],
-    "strategies": ["ma_crossover", "macd_rsi", "bollinger_rsi_adx"],
-    "initial_capital": 1_000_000,
-    "capital_pct": 5.0,
-    "interval_seconds": 60,
+    "symbols": ["SPY", "QQQ"],
+    "strategies": ["bollinger_rsi_adx"],
+    "initial_capital": 200_000,
+    "capital_pct": 100.0,
+    "interval_seconds": 3600,
     "optimize_n_trials": 50,
-    "optimize_metric": "consistency_ratio",
-    "drawdown_reduce": 0.05,
-    "drawdown_halt": 0.08,
-    "drawdown_emergency": 0.12,
+    "optimize_metric": "combined_score",
+    "drawdown_reduce": 0.03,
+    "drawdown_halt": 0.05,
+    "drawdown_emergency": 0.08,
     "correlation_threshold": 0.8,
     "drift_methods": ["fallback"],
     "notification_channels": ["log"],
@@ -69,8 +72,16 @@ DEFAULT_CONFIG = {
     "daily_report_hour": 18,
     "auto_optimize_days": 30,
     "auto_rebalance_days": 30,
-    "scale_up_sharpe_threshold": 0.5,
-    "scale_up_max_capital_pct": 50.0,
+    "scale_up_sharpe_threshold": 0.3,
+    "scale_up_max_capital_pct": 100.0,
+    # Kelly Criterion
+    "kelly_fraction": 0.5,
+    "max_position_pct": 0.30,
+    "daily_loss_limit_pct": 0.02,
+    # Funding Rate Arbitrage
+    "funding_rate_exchange": "",
+    "funding_symbols": ["ETH/USDT:USDT", "SOL/USDT:USDT"],
+    "min_funding_rate": 0.0001,
 }
 
 
@@ -275,11 +286,33 @@ class AutoTrader:
         self._notifier = _setup_notifications(config)
         self._strategies = _load_strategies()
 
+        # Kelly Criterion ポジションサイザー
+        self._sizer = PositionSizer(
+            kelly_fraction=config.get("kelly_fraction", 0.5),
+            max_position_pct=config.get("max_position_pct", 0.30),
+            daily_loss_limit_pct=config.get("daily_loss_limit_pct", 0.02),
+        )
+
+        # Funding Rate Arbitrage
+        fr_exchange = config.get("funding_rate_exchange", "")
+        self._fr_strategy: Optional[FundingArbStrategy] = None
+        if fr_exchange:
+            self._fr_strategy = FundingArbStrategy(
+                exchange_id=fr_exchange,
+                config={"enableRateLimit": True},
+                min_funding_rate=config.get("min_funding_rate", 0.0001),
+            )
+
+        # Grid Trading (暗号レンジ用)
+        self._grid: Optional[GridTradingStrategy] = None
+
         # 状態
         self._daily_pnls: List[float] = []
         self._last_optimize_date: Optional[str] = None
         self._last_rebalance_date: Optional[str] = None
         self._current_capital_pct = config["capital_pct"]
+        self._trade_wins: int = 0
+        self._trade_losses: int = 0
 
     async def run(self) -> None:
         """メインループを開始する。"""
@@ -330,9 +363,27 @@ class AutoTrader:
             ))
             return
 
-        # シグナル生成 + 注文 (簡略版)
+        # --- Funding Rate Arbitrage (最優先・最低リスク) ---
+        if self._fr_strategy and self._fr_strategy.is_available:
+            for fr_sym in self._config.get("funding_symbols", []):
+                try:
+                    eval_result = self._fr_strategy.evaluate(fr_sym)
+                    action = eval_result["action"]
+                    if action == "enter":
+                        logger.info("FR Arb エントリー候補: %s (%s)", fr_sym, eval_result["reason"])
+                    elif action == "exit":
+                        logger.info("FR Arb エグジット: %s (%s)", fr_sym, eval_result["reason"])
+                except Exception as e:
+                    logger.debug("FR Arb エラー %s: %s", fr_sym, e)
+
+        # --- テクニカル戦略 (Kelly Criterion でサイジング) ---
         end_date = now.strftime("%Y-%m-%d")
         start_date = (now - timedelta(days=365)).strftime("%Y-%m-%d")
+
+        # 日次リセット判定
+        today_str = now.strftime("%Y-%m-%d")
+        if self._sizer._current_date != today_str:
+            self._sizer.reset_daily(today_str)
 
         for symbol in self._config["symbols"]:
             for strat_name in self._config["strategies"]:
@@ -346,12 +397,38 @@ class AutoTrader:
                     signal = strategy.generate_signal_realtime(data)
 
                     if signal != 0:
-                        qty = max(1, int(balance * dd_status.exposure_ratio * 0.01))
+                        # Kelly Criterion でポジションサイズ計算
+                        win_rate = self._trade_wins / max(1, self._trade_wins + self._trade_losses)
+                        if win_rate == 0:
+                            win_rate = 0.6  # 初期値（Bollinger想定）
+
+                        sizing = self._sizer.calculate(
+                            capital=balance,
+                            win_rate=win_rate,
+                            avg_win=8441,   # Bollinger SPY 5Y実績
+                            avg_loss=9186,  # Bollinger SPY 5Y実績
+                        )
+
+                        if sizing.blocked:
+                            logger.info("ポジションブロック: %s (%s)", symbol, sizing.reason)
+                            continue
+
+                        qty = max(1, int(sizing.position_amount * dd_status.exposure_ratio / float(data["close"].iloc[-1])))
                         side = OrderSide.BUY if signal > 0 else OrderSide.SELL
-                        self._oms.submit(
+
+                        managed = self._oms.submit(
                             broker=broker, symbol=symbol, side=side,
                             order_type=OrderType.MARKET, quantity=qty,
                             strategy_name=strat_name,
+                        )
+
+                        # 勝敗記録（成行の場合は即約定）
+                        if managed.status.value == "filled":
+                            self._trade_wins += 1
+                        logger.info(
+                            "注文: %s %s qty=%d (Kelly=%.1f%%, DD_exp=%.1f%%)",
+                            symbol, side.value, qty,
+                            sizing.position_pct * 100, dd_status.exposure_ratio * 100,
                         )
                 except Exception as e:
                     logger.debug("シグナル生成エラー %s/%s: %s", symbol, strat_name, e)
