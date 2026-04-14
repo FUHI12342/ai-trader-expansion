@@ -598,6 +598,53 @@ async def run_optimization(
     )
 
 
+# ---------------------------------------------------------------------------
+# ヘルスチェック
+# ---------------------------------------------------------------------------
+
+class HealthResponse(BaseModel):
+    status: str
+    api: bool
+    strategies_loaded: int
+    uptime_seconds: Optional[float] = None
+    memory_usage_mb: Optional[float] = None
+
+_startup_time: Optional[float] = None
+
+@app.on_event("startup")
+async def _set_startup_time() -> None:
+    global _startup_time
+    import time as _time
+    _startup_time = _time.time()
+
+@app.get("/api/health", response_model=HealthResponse, summary="ヘルスチェック")
+async def health_check() -> HealthResponse:
+    """システム稼働状況を返す。"""
+    import time as _time
+
+    uptime = None
+    if _startup_time is not None:
+        uptime = _time.time() - _startup_time
+
+    mem_mb = None
+    try:
+        import os
+        if hasattr(os, "getpid"):
+            import psutil  # type: ignore[import-not-found]
+            proc = psutil.Process(os.getpid())
+            mem_mb = proc.memory_info().rss / (1024 * 1024)
+    except ImportError:
+        pass
+
+    return HealthResponse(
+        status="ok",
+        api=True,
+        strategies_loaded=len(_strategies),
+        uptime_seconds=uptime,
+        memory_usage_mb=mem_mb,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     settings = get_settings()
