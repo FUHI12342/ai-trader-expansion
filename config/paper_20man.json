@@ -1,0 +1,23 @@
+{
+  "mode": "auto",
+  "symbols": ["SPY", "QQQ"],
+  "strategies": ["bollinger_rsi_adx"],
+  "initial_capital": 200000,
+  "capital_pct": 100.0,
+  "interval_seconds": 3600,
+  "optimize_n_trials": 50,
+  "optimize_metric": "combined_score",
+  "drawdown_reduce": 0.03,
+  "drawdown_halt": 0.05,
+  "drawdown_emergency": 0.08,
+  "correlation_threshold": 0.8,
+  "drift_methods": ["fallback"],
+  "notification_channels": ["log"],
+  "slack_webhook": "",
+  "discord_webhook": "",
+  "daily_report_hour": 18,
+  "auto_optimize_days": 30,
+  "auto_rebalance_days": 30,
+  "scale_up_sharpe_threshold": 0.3,
+  "scale_up_max_capital_pct": 100.0
+}
