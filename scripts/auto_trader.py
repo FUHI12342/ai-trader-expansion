@@ -306,6 +306,12 @@ class AutoTrader:
         # Grid Trading (暗号レンジ用)
         self._grid: Optional[GridTradingStrategy] = None
 
+        # 自動強化学習
+        from src.learning.self_improver import SelfImprover
+        self._improver = SelfImprover(
+            optimize_interval_days=config.get("auto_optimize_days", 7),
+        )
+
         # 状態
         self._daily_pnls: List[float] = []
         self._last_optimize_date: Optional[str] = None
@@ -452,6 +458,24 @@ class AutoTrader:
         # 日次処理
         if now.hour == self._config["daily_report_hour"] and self._iteration % 60 == 0:
             self._daily_report(broker)
+
+        # 自動強化サイクル (日次、daily_report_hourと同時刻)
+        if now.hour == self._config["daily_report_hour"] and self._iteration % 60 == 1:
+            try:
+                improve_result = self._improver.run_cycle(
+                    dm=self._dm,
+                    strategies=self._strategies,
+                    symbols=self._config["symbols"],
+                )
+                if improve_result.get("pending_improvements"):
+                    self._notifier.send(TradingEvent(
+                        event_type=EventType.STAGE_CHANGE,
+                        title="自動強化: 改善候補発見",
+                        message=json.dumps(improve_result["pending_improvements"], ensure_ascii=False),
+                        data=improve_result,
+                    ))
+            except Exception as e:
+                logger.warning("自動強化サイクルエラー: %s", e)
 
         # 定期最適化 (auto_optimize_days ごと)
         today = now.strftime("%Y-%m-%d")
