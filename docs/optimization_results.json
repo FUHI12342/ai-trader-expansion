@@ -1,0 +1,40 @@
+{
+  "7203.T/ma_crossover": {
+    "best_params": {
+      "fast_period": 38,
+      "slow_period": 28
+    },
+    "best_score": 0.6134,
+    "optimized_return_pct": 80.67,
+    "optimized_sharpe": 0.675,
+    "optimized_max_dd": -20.22,
+    "optimized_win_rate": 70.0,
+    "trades": 20
+  },
+  "QQQ/ma_crossover": {
+    "best_params": {
+      "fast_period": 29,
+      "slow_period": 47
+    },
+    "best_score": 0.9506,
+    "optimized_return_pct": 11.94,
+    "optimized_sharpe": 0.22,
+    "optimized_max_dd": -33.6,
+    "optimized_win_rate": 53.3,
+    "trades": 15
+  },
+  "9984.T/bollinger_rsi_adx": {
+    "best_params": {
+      "bb_period": 13,
+      "rsi_period": 9,
+      "adx_period": 7,
+      "adx_threshold": 32.992642186624025
+    },
+    "best_score": 0.7696,
+    "optimized_return_pct": 38.23,
+    "optimized_sharpe": 0.357,
+    "optimized_max_dd": -45.6,
+    "optimized_win_rate": 50.0,
+    "trades": 6
+  }
+}
