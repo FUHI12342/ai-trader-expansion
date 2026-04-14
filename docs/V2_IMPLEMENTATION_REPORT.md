@@ -131,47 +131,50 @@ Phase 1〜7 全完了
 - 通知配信 (Slack/Discord/ログ)
 - ヘルスチェック API
 
-### 6-2. 手動操作が必要
-- TradingLoop の起動/停止
-- ブローカー API キーの設定
-- Optuna 最適化の実行トリガー
-- A/B テストの開始判断
-- 本番ブローカーへの切替
+### 6-2. 自動化済み (auto_trader.py で統合)
+- `scripts/auto_trader.py --mode auto` で全ステップ統合実行
+- TradingLoop + OMS + ドリフト検出 + DD制御を1プロセスで実行
+- 日次レポート自動送信 (daily_report_hour 設定)
+- 定期最適化 (auto_optimize_days 周期)
+- 自動スケールアップ (Sharpe30d > threshold で資金増額)
+
+### 6-3. 手動操作が残るもの
+- ブローカー API キーの初回設定 (環境変数)
+- `--mode live` への切替判断 (ペーパー検証後)
+- 最終的な本番投入の意思決定
 
 ---
 
-## 7. 実運用ロードマップ
+## 7. 実運用ロードマップ (自動化対応)
 
-### Step 1: ペーパートレーディング検証 (1-2週間)
-- [ ] 実市場データ (yfinance/JQuants) でバックテスト
-- [ ] TradingLoop をペーパーモードで24時間稼働
-- [ ] 日次レポートで性能モニタリング
-- [ ] DriftDetector の閾値チューニング
+### Step 1: ペーパー検証 — `python scripts/auto_trader.py --mode paper`
+- 実市場データ (yfinance/JQuants) でマルチ銘柄×マルチ戦略バックテスト
+- 結果を JSON で出力、パフォーマンス比較
+- **自動化**: コマンド1回で全銘柄×全戦略を一括実行
 
-### Step 2: パラメータ最適化 (1週間)
-- [ ] 主要戦略を Optuna で最適化 (n_trials=100)
-- [ ] Walk-Forward OOS 検証
-- [ ] 最適パラメータでの再バックテスト
-- [ ] A/B テスト実施
+### Step 2: パラメータ最適化 — `python scripts/auto_trader.py --mode optimize`
+- Optuna で全戦略を自動最適化
+- auto_optimize_days 設定で定期再最適化
+- **自動化**: autoモード内で定期実行
 
-### Step 3: 小額ライブトレード (2-4週間)
-- [ ] kabuSTATION/CCXT API キー設定
-- [ ] BrokerFactory をライブモードに切替
-- [ ] 初期資金: 総資産の5%以下
-- [ ] DrawdownController 閾値: 5%/8%/10%
-- [ ] 日次 Reconciliation 実行
+### Step 3: ライブトレード — `python scripts/auto_trader.py --mode live`
+- 環境変数に API キー設定後、コマンド1回で開始
+- OMS が注文管理、DD制御が自動エクスポージャー調整
+- 日次レポートが Slack/Discord/ログに自動送信
+- **自動化**: SIGINT/SIGTERM でグレースフル停止
 
-### Step 4: 段階的スケールアップ (1-3ヶ月)
-- [ ] CapitalController のステージ昇格
-- [ ] マルチ戦略 + ポートフォリオ最適化
-- [ ] CorrelationMonitor による分散確認
-- [ ] LINE/Slack 通知の本番設定
+### Step 4: スケールアップ — autoモードで自動
+- `_maybe_scale_up()`: 直近30日 Sharpe > threshold で自動増額
+- capital_pct: 5% → 7.5% → 11.25% ... (1.5倍ずつ、上限50%)
+- CorrelationMonitor で分散効果を監視
+- DrawdownController で段階的制御 (5%/8%/12%)
+- **自動化**: 条件充足時に自動スケールアップ + 通知
 
-### Step 5: 完全自動化 (3ヶ月目以降)
-- [ ] cron/systemd で TradingLoop 自動起動
-- [ ] 日次レポート自動送信
-- [ ] ドリフト検出 → 自動再訓練フロー確立
-- [ ] 週次 Reconciliation + 月次パフォーマンスレビュー
+### Step 5: 完全自動化 — `python scripts/auto_trader.py --mode auto`
+- 全ステップを1プロセスで統合実行
+- Windows: タスクスケジューラ or NSSM サービス化
+- Linux: systemd unit or crontab
+- ドリフト検出 → 自動再最適化 → A/B テスト → promote/rollback
 
 ---
 
