@@ -116,3 +116,24 @@ class BaseStrategy(ABC):
             index は data.index と同じ
         """
         ...
+
+    def generate_signal_realtime(self, bars: pd.DataFrame) -> int:
+        """リアルタイムバーから最新シグナルを生成する（optional）。
+
+        デフォルト実装は generate_signals() の末尾値を返す。
+        サブクラスでオーバーライドしてリアルタイム固有のロジックを実装可能。
+
+        Parameters
+        ----------
+        bars:
+            直近の 1分足 OHLCV DataFrame
+
+        Returns
+        -------
+        int
+            SignalType 値（1=BUY, -1=SELL, 0=FLAT）
+        """
+        if bars.empty or len(bars) < self._min_bars():
+            return SignalType.FLAT
+        signals = self.generate_signals(bars.copy())
+        return int(signals.iloc[-1]) if len(signals) > 0 else SignalType.FLAT

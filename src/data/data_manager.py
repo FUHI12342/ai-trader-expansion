@@ -464,6 +464,46 @@ class DataManager:
         if self._jquants_raw:
             self._jquants_raw.close()
 
+    # ------------------------------------------------------------------
+    # リアルタイムデータ
+    # ------------------------------------------------------------------
+
+    def subscribe_realtime(
+        self,
+        symbols: list[str],
+        callback: "Callable[[TickData], None]",
+        exchange_id: str = "binance",
+        config: Optional[dict] = None,
+    ) -> "WebSocketFeed":
+        """リアルタイム価格フィードを開始する。
+
+        銘柄の asset_class に応じてソースを自動判別する:
+        - 暗号資産 → ccxt.pro WebSocket
+        - その他 → ポーリング
+
+        Parameters
+        ----------
+        symbols:
+            購読する銘柄のリスト
+        callback:
+            TickData 受信時のコールバック
+        exchange_id:
+            取引所ID（デフォルト: "binance"）
+        config:
+            取引所設定
+
+        Returns
+        -------
+        WebSocketFeed
+            作成されたフィードインスタンス（stop()/close() で停止）
+        """
+        from .ws_feed import WebSocketFeed, TickData  # noqa: F811
+
+        feed = WebSocketFeed(exchange_id=exchange_id, config=config)
+        feed.subscribe(symbols)
+        feed.add_callback(callback)
+        return feed
+
     def __enter__(self) -> "DataManager":
         return self
 
