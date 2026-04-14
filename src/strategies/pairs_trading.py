@@ -61,13 +61,17 @@ class PairsTradingStrategy:
         self,
         entry_z: float = 2.0,
         exit_z: float = 0.5,
-        stop_z: float = 3.5,
+        stop_z: float = 3.0,
         lookback: int = 60,
+        max_holding_days: int = 30,
+        rolling_hedge: bool = True,
     ) -> None:
         self._entry_z = entry_z
         self._exit_z = exit_z
         self._stop_z = stop_z
         self._lookback = lookback
+        self._max_holding_days = max_holding_days
+        self._rolling_hedge = rolling_hedge
 
     def compute_hedge_ratio(self, prices_a: pd.Series, prices_b: pd.Series) -> float:
         """OLS回帰でヘッジ比率を計算する。"""
@@ -166,6 +170,7 @@ class PairsTradingStrategy:
         """
         hedge = self.compute_hedge_ratio(prices_a, prices_b)
         spread = self.compute_spread(prices_a, prices_b, hedge)
+
         z_scores = self.compute_z_score(spread)
 
         trades: List[PairTrade] = []
@@ -201,6 +206,7 @@ class PairsTradingStrategy:
             elif position != 0:
                 should_exit = False
                 reason = ""
+                holding_days = i - entry_idx
 
                 if abs(z) < self._exit_z:
                     should_exit = True
@@ -208,6 +214,9 @@ class PairsTradingStrategy:
                 elif abs(z) > self._stop_z:
                     should_exit = True
                     reason = "ストップロス"
+                elif holding_days >= self._max_holding_days:
+                    should_exit = True
+                    reason = "最大保有期間超過"
 
                 if should_exit:
                     spread_change = current_spread - entry_spread
