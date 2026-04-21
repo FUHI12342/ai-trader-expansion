@@ -37,6 +37,8 @@ from src.learning.ab_test import ABTestManager
 from src.notifications.router import (
     NotificationRouter, LogChannel, TradingEvent, EventType,
 )
+from src.defi.aave_simulator import AaveSimulator
+from src.defi.waiting_capital_manager import RebalanceActionType, WaitingCapitalManager
 from src.risk.drawdown_controller import DrawdownController, DrawdownAction
 from src.risk.correlation_monitor import CorrelationMonitor
 from src.risk.portfolio_optimizer import PortfolioOptimizer
@@ -82,6 +84,13 @@ DEFAULT_CONFIG = {
     "funding_rate_exchange": "",
     "funding_symbols": ["ETH/USDT:USDT", "SOL/USDT:USDT"],
     "min_funding_rate": 0.0001,
+    # DeFi 待機資金運用 (Aave V3 USDC シミュレーター)
+    "defi_enabled": False,
+    "defi_apy": 0.05,
+    "defi_flat_threshold_deposit": 0.5,
+    "defi_flat_threshold_withdraw": 0.2,
+    "defi_buffer_pct": 0.1,
+    "defi_min_rebalance": 1000.0,
 }
 
 
@@ -293,6 +302,22 @@ class AutoTrader:
             daily_loss_limit_pct=config.get("daily_loss_limit_pct", 0.02),
         )
 
+        # DeFi 待機資金運用 (optional)
+        self._aave: Optional[AaveSimulator] = None
+        self._defi_mgr: Optional[WaitingCapitalManager] = None
+        if config.get("defi_enabled", False):
+            self._aave = AaveSimulator(
+                apy=config.get("defi_apy", 0.05),
+                compound_daily=True,
+            )
+            self._defi_mgr = WaitingCapitalManager(
+                aave=self._aave,
+                flat_threshold_deposit=config.get("defi_flat_threshold_deposit", 0.5),
+                flat_threshold_withdraw=config.get("defi_flat_threshold_withdraw", 0.2),
+                buffer_pct=config.get("defi_buffer_pct", 0.1),
+                min_rebalance_amount=config.get("defi_min_rebalance", 1000.0),
+            )
+
         # Funding Rate Arbitrage
         fr_exchange = config.get("funding_rate_exchange", "")
         self._fr_strategy: Optional[FundingArbStrategy] = None
@@ -443,6 +468,9 @@ class AutoTrader:
         self._oms.monitor(broker)
         self._oms.cancel_stale(broker)
 
+        # DeFi 待機資金リバランス (optional)
+        self._maybe_rebalance_defi(broker)
+
         # ドリフト検出
         pnl = balance - self._config["initial_capital"]
         drift_result = self._drift.update(pnl)
@@ -491,6 +519,47 @@ class AutoTrader:
         # 自動スケールアップ (Step 4)
         self._maybe_scale_up(broker)
 
+    def _maybe_rebalance_defi(self, broker: Any) -> None:
+        """DeFi待機資金のリバランス判定 + 仮想送金を実行する。
+
+        実ブローカーとDeFiプロトコルの実接続は未対応 — 口座内部会計として
+        cash_balance から Aave に移したことにする。実運用時はここで USDC 送金/引出。
+        """
+        if self._defi_mgr is None or self._aave is None:
+            return
+
+        try:
+            cash = float(broker.get_balance())
+            positions = broker.get_positions() or {}
+            active_value = sum(
+                float(getattr(p, "market_value", 0.0)) for p in positions.values()
+            )
+            total = cash + active_value + self._aave.balance
+            action = self._defi_mgr.decide(
+                cash_balance=cash,
+                active_position_value=active_value,
+                total_capital=total,
+            )
+
+            if action.action == RebalanceActionType.DEPOSIT:
+                result = self._aave.deposit(action.amount)
+                if result.success and hasattr(broker, "_balance"):
+                    broker._balance -= action.amount
+                logger.info(
+                    "DeFi預入: %.2f USDC (FLAT=%.1f%%) → Aave残高 %.2f",
+                    action.amount, action.flat_ratio * 100, self._aave.balance,
+                )
+            elif action.action == RebalanceActionType.WITHDRAW:
+                result = self._aave.withdraw(action.amount)
+                if result.success and hasattr(broker, "_balance"):
+                    broker._balance += action.amount
+                logger.info(
+                    "DeFi引出: %.2f USDC (FLAT=%.1f%%) → Aave残高 %.2f",
+                    action.amount, action.flat_ratio * 100, self._aave.balance,
+                )
+        except Exception as e:
+            logger.warning("DeFiリバランスエラー: %s", e)
+
     def _daily_report(self, broker: Any) -> None:
         """日次レポートを送信する。検証ステータス判定を含む。"""
         balance = broker.get_balance()
@@ -515,11 +584,21 @@ class AutoTrader:
         status = self._verification_status(total_trades, win_rate, sharpe)
         title = f"[{status['label']}] AI Trader 日次レポート"
 
+        # DeFi Aave 状況 (有効時のみ)
+        defi_section = ""
+        if self._aave is not None:
+            snap = self._aave.snapshot()
+            defi_section = (
+                f"\nDeFi(Aave): 元本{snap.principal:,.0f} + 利息{snap.accrued_interest:,.0f} "
+                f"= {snap.total_balance:,.0f} USDC (APY {snap.apy*100:.1f}%)"
+            )
+
         report = (
             f"== 検証ステータス: {status['label']} ==\n"
             f"{status['detail']}\n"
             f"\n"
-            f"残高: {balance:,.0f}円 (PnL: {pnl:+,.0f}円 / {pnl_pct:+.2f}%)\n"
+            f"残高: {balance:,.0f}円 (PnL: {pnl:+,.0f}円 / {pnl_pct:+.2f}%)"
+            f"{defi_section}\n"
             f"取引: {total_trades}件 (勝率: {win_rate:.0f}%)\n"
             f"Sharpe(推定): {sharpe:.2f}\n"
             f"OMS: {summary}\n"

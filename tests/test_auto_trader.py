@@ -117,3 +117,57 @@ class TestVerificationStatus:
         s = AutoTrader._verification_status(30, 55.0, -0.1)
         assert s["level"] == "paper"
         assert not s["ready"]
+
+
+class TestAutoTraderDeFi:
+    """DeFi 待機資金統合のテスト。"""
+
+    def test_defi_disabled_by_default(self) -> None:
+        """デフォルトでは DeFi 無効。"""
+        trader = AutoTrader(dict(DEFAULT_CONFIG))
+        assert trader._aave is None
+        assert trader._defi_mgr is None
+
+    def test_defi_enabled_initializes_components(self) -> None:
+        """defi_enabled=True で Aave + Manager 生成。"""
+        config = dict(DEFAULT_CONFIG)
+        config["defi_enabled"] = True
+        config["defi_apy"] = 0.06
+        trader = AutoTrader(config)
+        assert trader._aave is not None
+        assert trader._defi_mgr is not None
+        assert trader._aave.apy == 0.06
+
+    def test_rebalance_defi_noop_when_disabled(self) -> None:
+        """DeFi 無効時は何も起きない。"""
+        trader = AutoTrader(dict(DEFAULT_CONFIG))
+
+        class StubBroker:
+            def get_balance(self) -> float:
+                return 200000.0
+            def get_positions(self) -> dict:
+                return {}
+
+        # 例外なく完了
+        trader._maybe_rebalance_defi(StubBroker())
+
+    def test_rebalance_defi_deposits_when_flat_high(self) -> None:
+        """FLAT比率高で Aave に預入される。"""
+        config = dict(DEFAULT_CONFIG)
+        config["defi_enabled"] = True
+        config["defi_min_rebalance"] = 10.0
+        trader = AutoTrader(config)
+
+        class StubBroker:
+            _balance = 200000.0
+            def get_balance(self) -> float:
+                return self._balance
+            def get_positions(self) -> dict:
+                return {}
+
+        broker = StubBroker()
+        trader._maybe_rebalance_defi(broker)
+        assert trader._aave is not None
+        assert trader._aave.balance > 0.0
+        assert broker._balance < 200000.0
+
