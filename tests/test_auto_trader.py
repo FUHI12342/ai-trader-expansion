@@ -151,6 +151,45 @@ class TestAutoTraderDeFi:
         # 例外なく完了
         trader._maybe_rebalance_defi(StubBroker())
 
+    def test_milestone_no_promotion_initially(self) -> None:
+        """初回呼び出しは last_level を記録するだけで通知なし。"""
+        trader = AutoTrader(dict(DEFAULT_CONFIG))
+        from unittest.mock import MagicMock
+        trader._notifier = MagicMock()
+        trader._notify_milestone_if_promoted({"level": "paper", "detail": "", "ready": False})
+        trader._notifier.send.assert_not_called()
+        assert trader._last_verification_level == "paper"
+
+    def test_milestone_notifies_on_promotion(self) -> None:
+        """paper→minimum への昇格でnotifyが発火する。"""
+        trader = AutoTrader(dict(DEFAULT_CONFIG))
+        from unittest.mock import MagicMock
+        trader._notifier = MagicMock()
+        # 初回
+        trader._notify_milestone_if_promoted({"level": "paper", "detail": "", "ready": False})
+        # 昇格
+        trader._notify_milestone_if_promoted({"level": "minimum", "detail": "30取引達成", "ready": True})
+        assert trader._notifier.send.call_count == 1
+        assert trader._last_verification_level == "minimum"
+
+    def test_milestone_no_notify_on_same_level(self) -> None:
+        """同レベル継続なら通知しない。"""
+        trader = AutoTrader(dict(DEFAULT_CONFIG))
+        from unittest.mock import MagicMock
+        trader._notifier = MagicMock()
+        trader._notify_milestone_if_promoted({"level": "minimum", "detail": "", "ready": True})
+        trader._notify_milestone_if_promoted({"level": "minimum", "detail": "", "ready": True})
+        trader._notifier.send.assert_not_called()
+
+    def test_milestone_no_notify_on_demotion(self) -> None:
+        """降格 (recommended→paper) では通知しない。"""
+        trader = AutoTrader(dict(DEFAULT_CONFIG))
+        from unittest.mock import MagicMock
+        trader._notifier = MagicMock()
+        trader._notify_milestone_if_promoted({"level": "recommended", "detail": "", "ready": True})
+        trader._notify_milestone_if_promoted({"level": "paper", "detail": "", "ready": False})
+        trader._notifier.send.assert_not_called()
+
     def test_rebalance_defi_deposits_when_flat_high(self) -> None:
         """FLAT比率高で Aave に預入される。"""
         config = dict(DEFAULT_CONFIG)

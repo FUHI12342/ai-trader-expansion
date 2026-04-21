@@ -519,6 +519,50 @@ class AutoTrader:
         # 自動スケールアップ (Step 4)
         self._maybe_scale_up(broker)
 
+    _VERIFICATION_LEVEL_ORDER = ["paper", "minimum", "recommended", "ideal"]
+
+    def _notify_milestone_if_promoted(self, status: Dict[str, Any]) -> None:
+        """検証レベル昇格を検出したらマイルストン通知を発火する。
+
+        状態は self._last_verification_level に保持。
+        """
+        current = status.get("level", "paper")
+        last = getattr(self, "_last_verification_level", None)
+
+        if last is None:
+            self._last_verification_level = current
+            return
+
+        try:
+            cur_idx = self._VERIFICATION_LEVEL_ORDER.index(current)
+            last_idx = self._VERIFICATION_LEVEL_ORDER.index(last)
+        except ValueError:
+            return
+
+        if cur_idx <= last_idx:
+            return
+
+        # 昇格検出
+        self._last_verification_level = current
+        milestone_title = f"🎯 マイルストン達成: {last.upper()} → {current.upper()}"
+        milestone_msg = (
+            f"検証レベルが {last} から {current} に昇格しました。\n"
+            f"{status.get('detail', '')}\n"
+            f"次のアクション: "
+            f"{'段階的に実資金を投入' if status.get('ready') else 'ペーパートレード継続'}"
+        )
+        logger.info("[MILESTONE] %s", milestone_title)
+        try:
+            self._notifier.send(TradingEvent(
+                event_type=EventType.CUSTOM,
+                title=milestone_title,
+                message=milestone_msg,
+                data={"from": last, "to": current, "status": status},
+                severity="info",
+            ))
+        except Exception as e:
+            logger.warning("マイルストン通知失敗: %s", e)
+
     def _maybe_rebalance_defi(self, broker: Any) -> None:
         """DeFi待機資金のリバランス判定 + 仮想送金を実行する。
 
@@ -583,6 +627,9 @@ class AutoTrader:
 
         status = self._verification_status(total_trades, win_rate, sharpe)
         title = f"[{status['label']}] AI Trader 日次レポート"
+
+        # マイルストン通知: 検証レベル昇格を検出
+        self._notify_milestone_if_promoted(status)
 
         # DeFi Aave 状況 (有効時のみ)
         defi_section = ""
